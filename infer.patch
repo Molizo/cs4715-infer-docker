@@ -1,0 +1,141 @@
+diff --git a/infer/src/pulse/Pulse.ml b/infer/src/pulse/Pulse.ml
+index 965f700d9d..908084e117 100644
+--- a/infer/src/pulse/Pulse.ml
++++ b/infer/src/pulse/Pulse.ml
+@@ -1663,6 +1663,17 @@ let summary_count_channel =
+      channel )
+ 
+ 
++let node_states_channel =
++  lazy
++    (let output_dir = Filename.concat Config.results_dir "pulse" in
++     IUnix.mkdir_p output_dir ;
++     let filename = Format.asprintf "pulse-node-states-%a.json" Pid.pp (IUnix.getpid ()) in
++     let channel = Filename.concat output_dir filename |> Out_channel.create in
++     let close_channel () = Out_channel.close_no_err channel in
++     Epilogues.register ~f:close_channel ~description:"close node_states_channel for Pulse" ;
++     channel )
++
++
+ module DisjunctiveAnalyzer =
+   AbstractInterpreter.MakeDisjunctive
+     (PulseTransferFunctions)
+@@ -1906,6 +1917,71 @@ let python_register_info_per_source_lines proc_desc initial invariant_map =
+              SourcePrinter.add_info_after ~sourcefile:loc.file ~line:loc.line ~info ) )
+ 
+ 
++let json_of_location {Location.file; line; col; macro_file_opt= _; macro_line= _} =
++  `Assoc
++    [("file", `String (SourceFile.to_rel_path file)); ("line", `Int line); ("col", `Int col)]
++
++
++let json_of_node_id node = `Int (Procdesc.Node.get_id node :> int)
++
++let json_of_instrs node =
++  Procdesc.Node.get_instrs node
++  |> Instrs.fold ~init:[] ~f:(fun instrs instr ->
++         F.asprintf "%a" (Sil.pp_instr ~print_types:false Pp.text) instr :: instrs )
++  |> List.rev
++  |> List.map ~f:(fun instr -> `String instr)
++  |> fun instrs -> `List instrs
++
++
++let json_of_disjuncts (disjuncts, _non_disj) =
++  `List
++    (List.map disjuncts ~f:(fun (exec_state, _path) -> ExecutionDomain.yojson_of_t exec_state))
++
++
++let json_of_node_state invariant_map node =
++  let node_id = Procdesc.Node.get_id node in
++  match
++    ( DisjunctiveAnalyzer.extract_pre node_id invariant_map
++    , DisjunctiveAnalyzer.extract_post node_id invariant_map )
++  with
++  | Some pre, Some post ->
++      Some (`Assoc [("pre", json_of_disjuncts pre); ("post", json_of_disjuncts post)])
++  | _ ->
++      None
++
++
++let write_node_states_json proc_desc invariant_map =
++  let node_to_json node =
++    let node_json =
++      [ ("id", json_of_node_id node)
++      ; ("location", json_of_location (Procdesc.Node.get_loc node))
++      ; ("instrs", json_of_instrs node)
++      ; ("succs", `List (List.map (Procdesc.Node.get_succs node) ~f:json_of_node_id))
++      ; ("exn", `List (List.map (Procdesc.Node.get_exn node) ~f:json_of_node_id)) ]
++    in
++    let node_json =
++      match json_of_node_state invariant_map node with
++      | Some state ->
++          ("state", state) :: node_json
++      | None ->
++          node_json
++    in
++    `Assoc node_json
++  in
++  let nodes =
++    Procdesc.get_start_node proc_desc
++    :: (Procdesc.get_nodes proc_desc @ [Procdesc.get_exit_node proc_desc])
++  in
++  let json =
++    `Assoc
++      [ ( "procedure"
++        , `String (F.asprintf "%a" Procname.pp_unique_id (Procdesc.get_proc_name proc_desc)) )
++      ; ("nodes", `List (List.map nodes ~f:node_to_json)) ]
++  in
++  Yojson.Safe.to_channel (Lazy.force node_states_channel) json ;
++  Out_channel.output_char (Lazy.force node_states_channel) '\n'
++
++
+ let analyze specialization ({InterproceduralAnalysis.tenv; proc_desc} as analysis_data) =
+   let proc_name = Procdesc.get_proc_name proc_desc in
+   let proc_attrs = Procdesc.get_attributes proc_desc in
+@@ -1924,6 +2000,7 @@ let analyze specialization ({InterproceduralAnalysis.tenv; proc_desc} as analysi
+         (initial_disjuncts, initial_non_disj) )
+   in
+   let invariant_map = DisjunctiveAnalyzer.exec_pdesc analysis_data ~initial proc_desc in
++  write_node_states_json proc_desc invariant_map ;
+   if Config.source_debug then python_register_info_per_source_lines proc_desc initial invariant_map ;
+   log_number_of_unreachable_nodes proc_desc invariant_map ;
+   if CallGlobalForStats.is_one_call_stuck () then Stats.incr_pulse_summaries_unsat_for_caller () ;
+diff --git a/infer/src/pulse/PulseAbductiveDomain.mli b/infer/src/pulse/PulseAbductiveDomain.mli
+index b91dcae717..5a4c59ae8a 100644
+--- a/infer/src/pulse/PulseAbductiveDomain.mli
++++ b/infer/src/pulse/PulseAbductiveDomain.mli
+@@ -80,6 +80,8 @@ type t = private
+   }
+ [@@deriving equal]
+ 
++val yojson_of_t : t -> Yojson.Safe.t
++
+ val leq : lhs:t -> rhs:t -> bool
+ 
+ val pp : Format.formatter -> t -> unit
+diff --git a/infer/src/pulse/PulseExecutionDomain.ml b/infer/src/pulse/PulseExecutionDomain.ml
+index 76dc5a415d..155389e957 100644
+--- a/infer/src/pulse/PulseExecutionDomain.ml
++++ b/infer/src/pulse/PulseExecutionDomain.ml
+@@ -39,6 +39,8 @@ type 'abductive_domain_t base_t =
+ 
+ type t = AbductiveDomain.t base_t
+ 
++let yojson_of_t = yojson_of_base_t AbductiveDomain.yojson_of_t
++
+ let continue astate = ContinueProgram astate
+ 
+ let summary_of_stopped_execution = function
+diff --git a/infer/src/pulse/PulseExecutionDomain.mli b/infer/src/pulse/PulseExecutionDomain.mli
+index ad58a04981..d95cec8e45 100644
+--- a/infer/src/pulse/PulseExecutionDomain.mli
++++ b/infer/src/pulse/PulseExecutionDomain.mli
+@@ -33,6 +33,8 @@ type 'abductive_domain_t base_t =
+ 
+ type t = AbductiveDomain.t base_t
+ 
++val yojson_of_t : t -> Yojson.Safe.t
++
+ include AbstractDomain.Disjunct with type t := t
+ 
+ val pp_with_kind : Pp.print_kind -> PulsePathContext.t option -> F.formatter -> t -> unit
