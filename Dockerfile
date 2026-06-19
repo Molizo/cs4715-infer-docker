@@ -71,17 +71,36 @@ RUN cd /infer && \
     DESTDIR="/infer-release" \
     libdir_relative_to_bindir="../lib"
 
-FROM debian:bookworm-slim AS executor
+FROM debian:trixie-slim AS executor
 
-RUN apt-get update && apt-get install --yes --no-install-recommends sqlite3
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends \
+      python3 \
+      #python3-hypothesis \
+      python3-sortedcontainers \
+      python3-tqdm \
+      python3-z3 \
+      sqlite3 && \
+    rm -rf /var/lib/apt/lists/*
 
 # Get the infer release
 COPY --from=compilator /infer-release/usr/local /infer
+
+# Get examples and fuzzer tooling
+COPY examples /root/examples
+COPY fuzzer /root/fuzzer
+
+# Alias the Python script into a command we can call from anywhere
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      'exec python3 /root/fuzzer/main.py "$@"' \
+      > /usr/local/bin/infer-z3 && \
+    chmod +x /usr/local/bin/infer-z3
 
 # Install infer
 ENV PATH /infer/bin:${PATH}
 
 # if called with /infer-host mounted then copy infer there
-RUN if test -d /infer-host; then \
-      cp -av /infer/. /infer-host; \
-    fi
+#RUN if test -d /infer-host; then \
+#      cp -av /infer/. /infer-host; \
+#    fi
