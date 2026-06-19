@@ -91,7 +91,12 @@ def run_capture(
     )
 
 
-def regenerate_node_states(infer_bin: str, infer_out: Path, log_path: Path | None = None) -> None:
+def regenerate_node_states(
+    infer_bin: str,
+    infer_out: Path,
+    log_path: Path | None = None,
+    cwd: Path | None = None,
+) -> None:
     if not infer_out.exists():
         raise FileNotFoundError(f"Infer output directory does not exist: {infer_out}")
     pulse_dir = infer_out / "pulse"
@@ -108,6 +113,7 @@ def regenerate_node_states(infer_bin: str, infer_out: Path, log_path: Path | Non
             "--pulse-experimental-track-all-unknown-calls",
         ],
         log_path,
+        cwd=cwd,
     )
 
 
@@ -187,6 +193,7 @@ def collect(
         infer_bin,
         infer_out,
         None if command_dir is None else command_dir / "infer_analyze.log",
+        cwd=capture_cwd,
     )
     reports = load_reports(infer_out)
     summaries = load_summary_json(
