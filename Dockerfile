@@ -91,13 +91,13 @@ RUN pip3 install --break-system-packages clize
 COPY --from=compilator /infer-release/usr/local /infer
 
 # Get examples and fuzzer tooling
-COPY examples /root/examples
-COPY fuzzer /root/fuzzer
+COPY examples /app/examples
+COPY fuzzer /app/fuzzer
 
 # Alias the Python script into a command we can call from anywhere
 RUN printf '%s\n' \
       '#!/bin/sh' \
-      'exec python3 /root/fuzzer/main.py "$@"' \
+      'exec python3 /app/fuzzer/main.py "$@"' \
       > /usr/local/bin/infer-z3 && \
     chmod +x /usr/local/bin/infer-z3
 
