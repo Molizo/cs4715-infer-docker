@@ -1,0 +1,5 @@
+#include <stdlib.h>
+
+void unknown(int* p) {
+    *p = 5;
+}
