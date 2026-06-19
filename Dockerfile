@@ -76,12 +76,16 @@ FROM debian:trixie-slim AS executor
 RUN apt-get update && \
     apt-get install --yes --no-install-recommends \
       python3 \
-      #python3-hypothesis \
+	  python3-pip \
+	  #python3-hypothesis \
       python3-sortedcontainers \
       python3-tqdm \
       python3-z3 \
+	  build-essential \
       sqlite3 && \
     rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --break-system-packages clize
 
 # Get the infer release
 COPY --from=compilator /infer-release/usr/local /infer
