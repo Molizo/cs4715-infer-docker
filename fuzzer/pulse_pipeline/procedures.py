@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 
 INTEGER_TYPES = {"int"}
+BOOLEAN_TYPES = {"_Bool"} # todo: maybe add some more
 
 
 @dataclass(frozen=True)
@@ -22,12 +23,20 @@ class CType:
         return self.pointer_depth == 0 and self.base in INTEGER_TYPES
 
     @property
+    def is_bool_value(self) -> bool:
+        return self.pointer_depth == 0 and self.base in BOOLEAN_TYPES
+
+    @property
     def is_int_pointer(self) -> bool:
         return self.pointer_depth == 1 and self.base in INTEGER_TYPES
 
     @property
+    def is_bool_pointer(self) -> bool:
+        return self.pointer_depth == 1 and self.base in BOOLEAN_TYPES
+
+    @property
     def is_supported_formal(self) -> bool:
-        return self.is_int_value or self.is_int_pointer
+        return self.is_int_value or self.is_int_pointer or self.is_bool_value or self.is_bool_pointer
 
     def c_decl(self, name: str) -> str:
         stars = "*" * self.pointer_depth
@@ -126,4 +135,3 @@ def parse_procedures(debug_output: str) -> dict[str, Procedure]:
                 procedure.callees = [callee.strip() for callee in callees.split(",") if callee.strip()]
         procedures[procedure.name] = procedure
     return procedures
-

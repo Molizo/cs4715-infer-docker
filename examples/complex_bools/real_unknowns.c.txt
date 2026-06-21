@@ -1,0 +1,10 @@
+#include <stdbool.h>
+
+void invert_number(int* p, bool boo) {
+    if (boo)
+        *p = -*p;
+}
+
+void buggy_invert_number(int* p, bool boo) {
+    *p = -*p;
+}

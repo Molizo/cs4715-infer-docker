@@ -1,0 +1,4 @@
+void impure(int *n) {
+    static int m = 1;
+    *n = m++;
+}

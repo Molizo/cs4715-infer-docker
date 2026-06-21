@@ -51,7 +51,7 @@ class ObjectRunner:
 
         argtypes: list[Any] = []
         args: list[Any] = []
-        pointer_values: dict[str, ctypes.c_int] = {}
+        pointer_values: dict[str, ctypes.c_int | ctypes.c_bool] = {}
         values: dict[str, int] = {}
         for formal in procedure.formals:
             if formal.ctype.is_int_value:
@@ -59,12 +59,26 @@ class ObjectRunner:
                 argtypes.append(ctypes.c_int)
                 args.append(ctypes.c_int(value))
                 values[formal.name] = value
+            elif formal.ctype.is_bool_value:
+                value = bool(input_values.get(formal.name, 0))
+                argtypes.append(ctypes.c_bool)
+                args.append(ctypes.c_bool(value))
+                values[formal.name] = value
             elif formal.ctype.is_int_pointer:
                 input_name = f"{formal.name}_in"
                 value = int(input_values.get(input_name, 0))
                 cell = ctypes.c_int(value)
                 pointer_values[formal.name] = cell
                 argtypes.append(ctypes.POINTER(ctypes.c_int))
+                args.append(ctypes.byref(cell))
+                if input_name in input_values:
+                    values[input_name] = value
+            elif formal.ctype.is_bool_pointer:
+                input_name = f"{formal.name}_in"
+                value = bool(input_values.get(input_name, 0))
+                cell = ctypes.c_bool(value)
+                pointer_values[formal.name] = cell
+                argtypes.append(ctypes.POINTER(ctypes.c_bool))
                 args.append(ctypes.byref(cell))
                 if input_name in input_values:
                     values[input_name] = value

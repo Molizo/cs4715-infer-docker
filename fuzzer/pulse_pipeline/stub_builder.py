@@ -17,6 +17,12 @@ STATUS_RANK = {
 def c_int(value: int) -> str:
     return f"(int){value}LL"
 
+def c_bool(value: int) -> str:
+    if value == 1:
+        return "true"
+    else:
+        return "false"
+
 
 def prototype(procedure: Procedure) -> str:
     assert procedure.formals is not None
@@ -34,6 +40,9 @@ def render_effect(procedure: Procedure, values: dict[str, int]) -> list[str]:
         if formal.ctype.is_int_pointer:
             output_name = f"{formal.name}_out"
             lines.append(f"  if ({formal.name} != NULL) *{formal.name} = {c_int(values.get(output_name, 0))};")
+        elif formal.ctype.is_bool_pointer:
+            output_name = f"{formal.name}_out"
+            lines.append(f"  if ({formal.name} != NULL) *{formal.name} = {c_bool(values.get(output_name, 0))};")
     lines.append("  return;")
     return lines
 

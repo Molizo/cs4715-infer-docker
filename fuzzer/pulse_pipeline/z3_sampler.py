@@ -6,6 +6,8 @@ from dataclasses import replace
 from fractions import Fraction
 from typing import Callable
 
+from typing_extensions import Any
+
 import z3
 from tqdm import tqdm
 
@@ -13,6 +15,7 @@ from .il import Predicate, render_predicate
 from .pulse_to_il import ExtractedTarget
 from .result import TargetSampleResult
 from .z3_builder import issue_key, model_to_json, predicate_to_z3
+from .procedures import CType
 
 
 LOG = logging.getLogger(__name__)
@@ -43,14 +46,24 @@ def z3_value_to_int(value: z3.ExprRef) -> int:
 def input_variable_names(target: ExtractedTarget) -> tuple[str, ...]:
     if target.call_boundary is None:
         return ()
-    return tuple(sorted(set(target.call_boundary.input_variables.values())))
+    return tuple(sorted(target.call_boundary.input_variables.values()))
 
+def input_variable_types(target: ExtractedTarget) -> dict[str, CType]:
+    if target.call_boundary is None:
+        return {}
+    types = target.call_boundary.input_types
+    return dict(sorted(types.items()))
 
 def output_variable_names(target: ExtractedTarget) -> tuple[str, ...]:
     if target.call_boundary is None:
         return ()
     return tuple(sorted(target.call_boundary.output_variables.values()))
 
+def output_variable_types(target: ExtractedTarget) -> dict[str, CType]:
+    if target.call_boundary is None:
+        return {}
+    types = target.call_boundary.output_types
+    return dict(sorted(types.items()))
 
 def build_env(target: ExtractedTarget) -> dict[str, z3.ArithRef]:
     """Create all Z3 variables used by a target's pre/post constraints.
@@ -97,7 +110,7 @@ def rendered_simplified(exprs: list[z3.BoolRef]) -> list[str]:
 def target_constraint_summary(target: ExtractedTarget) -> dict[str, list[str]]:
     """Rendered constraints for per-target JSON summaries.
 
-    `raw_*` is close to the Pulse-derived IL.  
+    `raw_*` is close to the Pulse-derived IL.
     `simplified_*` is what the sampler actually adds to the solver.
     """
 
@@ -106,6 +119,13 @@ def target_constraint_summary(target: ExtractedTarget) -> dict[str, list[str]]:
     env = build_env(target)
     pre = simplified_exprs(target.constraints.pre, env)
     bad = simplified_exprs(target.constraints.bad_post, env)
+
+    # add boolean constraints here too
+    input_types = input_variable_types(target)
+    output_types = output_variable_types(target)
+    pre.extend(boolean_constraints(env, input_types))
+    bad.extend(boolean_constraints(env, output_types))
+
     return {
         "raw_pre": [render_predicate(predicate) for predicate in target.constraints.pre],
         "raw_bad_post": [render_predicate(predicate) for predicate in target.constraints.bad_post],
@@ -127,9 +147,19 @@ def assignment_constraints(env: dict[str, z3.ArithRef], values: dict[str, int]) 
 def gaussian_int() -> int:
     return int(round(random.gauss(0.0, INTEGER_SIGMA)))
 
+def random_bool() -> int:
+    return int(bool(random.getrandbits(1)))
 
-def sample_inputs(names: tuple[str, ...]) -> dict[str, int]:
-    return {name: gaussian_int() for name in names}
+# Booleans are just integers that are either 1 or 0
+def random_type(type: CType) -> int:
+    if type.is_bool_value or type.is_bool_pointer:
+        return random_bool()
+    else:
+        return gaussian_int()
+
+
+def sample_inputs(names: tuple[str, ...], types: tuple[CType, ...]) -> dict[str, int]:
+    return {name: random_type(type) for name, type in zip(names, types)}
 
 
 def sample_precondition_model(
@@ -208,6 +238,14 @@ def result(
     )
 
 
+def boolean_constraints(env: dict[str, z3.ArithRef], types: dict[str, CType]) -> list[z3.BoolRef]:
+    constraints = []
+    for name, type in types.items():
+        if type.is_bool_value:
+            constraints.append(z3.Or(env[name] == 1, env[name] == 0))
+    return constraints
+
+
 def run_target(
     target: ExtractedTarget,
     max_attempts: int,
@@ -225,6 +263,7 @@ def run_target(
     Each attempt pushes only the sampled values onto the relevant solver and pops them immediately,
     keeping both base solvers in their simplified state and reusable across many random draws.
     """
+    print("RUNNING TARGET")
 
     if target.status != "supported" or target.constraints is None:
         reason = target.reason or "target was not supported"
@@ -234,7 +273,14 @@ def run_target(
     env = build_env(target)
     pre = simplified_exprs(target.constraints.pre, env)
     bad = simplified_exprs(target.constraints.bad_post, env)
-    inputs = input_variable_names(target)
+    input_names = input_variable_names(target)
+    input_types = input_variable_types(target)
+    output_types = output_variable_types(target)
+
+    pre.extend(boolean_constraints(env, input_types))
+    bad.extend(boolean_constraints(env, output_types))
+
+    print("Extended pres: " + str(pre))
 
     pre_solver = z3.Solver()
     pre_solver.add(*pre)
@@ -251,7 +297,7 @@ def run_target(
     first_sample: TargetSampleResult | None = None
     tried: set[tuple[tuple[str, int], ...]] = set()
     attempts = rejected_unsat = rejected_duplicate = draws = 0
-    max_draws = 1 if not inputs else (max_attempts * MAX_DRAWS_PER_ATTEMPT)
+    max_draws = 1 if not input_names else (max_attempts * MAX_DRAWS_PER_ATTEMPT)
 
     def try_sample(sampled: dict[str, int]) -> TargetSampleResult | None:
         nonlocal attempts, first_sample, rejected_duplicate, rejected_unsat
@@ -312,7 +358,7 @@ def run_target(
         full_solver.pop()
         return None
 
-    model_result = try_sample(sample_precondition_model(pre_solver, env, inputs))
+    model_result = try_sample(sample_precondition_model(pre_solver, env, input_names))
     if model_result is not None:
         return model_result
 
@@ -321,7 +367,7 @@ def run_target(
         while attempts < max_attempts and draws < max_draws:
             draws += 1
             progress.update(1)
-            sample_result = try_sample(sample_inputs(inputs))
+            sample_result = try_sample(sample_inputs(input_names, tuple(input_types.values())))
             if sample_result is not None:
                 return sample_result
 
@@ -332,7 +378,7 @@ def run_target(
             rejected_unsat=rejected_unsat,
             rejected_duplicate=rejected_duplicate,
             draws=draws,
-            reason=sampled_no_bug_reason(inputs, attempts, max_attempts, draws, max_draws),
+            reason=sampled_no_bug_reason(input_names, attempts, max_attempts, draws, max_draws),
         )
     return result(
         target,

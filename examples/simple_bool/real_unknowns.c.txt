@@ -1,0 +1,5 @@
+#include <stdbool.h>
+
+void write_false(bool *flag) {
+    *flag = false;
+}

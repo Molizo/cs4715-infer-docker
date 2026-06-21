@@ -6,7 +6,7 @@ from fractions import Fraction
 from typing import Any
 
 from .il import ConstraintSet, Expr, Predicate, binary, const, rename_expr, render_predicate, unary, var
-from .procedures import Procedure
+from .procedures import CType, Procedure
 from .pulse_json import (
     Location,
     PulseNode,
@@ -45,7 +45,9 @@ class UnknownCallBoundary:
     actuals: tuple[str, ...]
     pulse_value_names: dict[str, str]
     input_variables: dict[str, str]
+    input_types: dict[str, CType]
     output_variables: dict[str, str]
+    output_types: dict[str, CType]
     output_pointer_addresses: dict[str, str]
 
     def to_json(self) -> dict[str, Any]:
@@ -223,18 +225,23 @@ def returned_from_unknown_values(domain: dict[str, Any]) -> tuple[str, ...]:
 def add_pointer_names(
     names: dict[str, str],
     formal_name: str,
+    formal_type: CType,
     pointer_addr: str | None,
     pre_derefs: dict[str, str],
     post_derefs: dict[str, str],
     input_vars: dict[str, str],
+    input_types: dict[str, CType],
     output_vars: dict[str, str],
+    output_types: dict[str, CType],
     output_pointer_addresses: dict[str, str],
 ) -> None:
     if pointer_addr is None:
         return
     input_name = f"{formal_name}_in"
     input_vars[formal_name] = input_name
+    input_types[formal_name] = formal_type
     output_vars[formal_name] = f"{formal_name}_out"
+    output_types[formal_name] = formal_type
     output_pointer_addresses[formal_name] = pointer_addr
     # TODO: Sample NULL for pointer formals too.  For each pointer variable, store a companion
     # `<name>_is_null` boolean, read any known nullness from the Pulse summaries, then always include
@@ -279,10 +286,12 @@ def build_call_boundary(
     names: dict[str, str] = {}
     input_vars: dict[str, str] = {}
     output_vars: dict[str, str] = {}
+    input_types: dict[str, CType] = {}
+    output_types: dict[str, CType] = {}
     output_pointer_addresses: dict[str, str] = {}
 
     for formal, actual in zip(procedure.formals, actuals, strict=True):
-        if formal.ctype.is_int_value:
+        if formal.ctype.is_int_value or formal.ctype.is_bool_value:
             local_name = temp_loads.get(actual, actual)
             local_addr = pre_locals.get(local_name) or post_locals.get(local_name)
             value = pre_derefs.get(local_addr or "")
@@ -293,7 +302,8 @@ def build_call_boundary(
             # The sampler expands that shared value back into both C arguments before calling the real unknown.
             variable_name = names.setdefault(value, formal.name)
             input_vars[formal.name] = variable_name
-        elif formal.ctype.is_int_pointer:
+            input_types[formal.name] = formal.ctype
+        elif formal.ctype.is_int_pointer or formal.ctype.is_bool_pointer:
             if actual.startswith("&"):
                 local_name = actual[1:]
                 pointer_addr = pre_locals.get(local_name) or post_locals.get(local_name)
@@ -304,11 +314,14 @@ def build_call_boundary(
             add_pointer_names(
                 names,
                 formal.name,
+                formal.ctype,
                 pointer_addr,
                 pre_derefs,
                 post_derefs,
                 input_vars,
+                input_types,
                 output_vars,
+                output_types,
                 output_pointer_addresses,
             )
 
@@ -317,18 +330,22 @@ def build_call_boundary(
         if index >= len(returned_values):
             break
         value = returned_values[index]
-        if formal.ctype.is_int_value and value not in names:
+        if (formal.ctype.is_int_value or formal.ctype.is_bool_value) and value not in names:
             names.setdefault(value, formal.name)
             input_vars[formal.name] = formal.name
+            input_types[formal.name] = formal.ctype
         elif formal.ctype.is_int_pointer:
             add_pointer_names(
                 names,
                 formal.name,
+                formal.ctype,
                 value,
                 pre_derefs,
                 post_derefs,
                 input_vars,
+                input_types,
                 output_vars,
+                output_types,
                 output_pointer_addresses,
             )
 
@@ -340,7 +357,9 @@ def build_call_boundary(
         actuals=actuals,
         pulse_value_names=names,
         input_variables=input_vars,
+        input_types=input_types,
         output_variables=output_vars,
+        output_types=output_types,
         output_pointer_addresses=output_pointer_addresses,
     )
 
@@ -660,6 +679,8 @@ def extract_targets(
 ) -> list[ExtractedTarget]:
     targets: list[ExtractedTarget] = []
     for report in reports:
+        print("a report was found")
         if report_depends_on_unknown(report):
+            print("it depended on unknwon!")
             targets.append(extract_one(report, node_procedures, procedures))
     return targets

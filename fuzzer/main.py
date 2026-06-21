@@ -121,5 +121,4 @@ def main(
 
 if __name__ == "__main__":
     from clize import run
-
     run(main)
