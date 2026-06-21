@@ -8,7 +8,7 @@ void detect_impure() {
 
   impure(&n);
 
-  if (n > 5) {
+  if (n > 0) {
     int *p = NULL;
     *p = 42;
   }

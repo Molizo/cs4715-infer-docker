@@ -280,8 +280,6 @@ def run_target(
     pre.extend(boolean_constraints(env, input_types))
     bad.extend(boolean_constraints(env, output_types))
 
-    print("Extended pres: " + str(pre))
-
     pre_solver = z3.Solver()
     pre_solver.add(*pre)
     pre_status = pre_solver.check()
@@ -358,18 +356,44 @@ def run_target(
         full_solver.pop()
         return None
 
-    model_result = try_sample(sample_precondition_model(pre_solver, env, input_names))
+    precondition_inputs = sample_precondition_model(pre_solver, env, input_names)
+    model_result = try_sample(precondition_inputs)
     if model_result is not None:
-        return model_result
+        result_repeat = try_sample(precondition_inputs)
+        if model_result != result_repeat:
+            return result(
+                target,
+                "impure",
+                attempts=attempts,
+                rejected_unsat=rejected_unsat,
+                rejected_duplicate=rejected_duplicate,
+                draws=draws,
+                reason="the function produced two different outputs for identical calls, and has been deemed impure",
+            )
+        else:
+            return model_result
 
     progress_label = f"{target.callee or '<unknown>'} draws"
     with tqdm(total=max_draws, desc=progress_label, unit="draw", leave=False) as progress:
         while attempts < max_attempts and draws < max_draws:
             draws += 1
             progress.update(1)
-            sample_result = try_sample(sample_inputs(input_names, tuple(input_types.values())))
+            inputs = sample_inputs(input_names, tuple(input_types.values()))
+            sample_result = try_sample(inputs)
             if sample_result is not None:
-                return sample_result
+                result_repeat = try_sample(inputs)
+                if model_result != result_repeat:
+                    return result(
+                        target,
+                        "impure",
+                        attempts=attempts,
+                        rejected_unsat=rejected_unsat,
+                        rejected_duplicate=rejected_duplicate,
+                        draws=draws,
+                        reason="the function produced two different outputs for identical calls, and has been deemed impure",
+                    )
+                else:
+                    return sample_result
 
     if first_sample is not None:
         return replace(
