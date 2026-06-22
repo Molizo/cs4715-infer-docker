@@ -66,6 +66,12 @@ infer-z3 /app/examples/broken_abs_lt_minus_10 /app/examples/broken_abs_lt_minus_
 
 `SHARED_LIBRARY` should point to an already-built `.so` that exports the unknown functions used by those clients.
 
+To build that `.so` for your own unknown implementation, compile it as a shared library:
+
+```sh
+gcc -shared -fPIC -o real_unknowns.so real_unknowns.c
+```
+
 Optional arguments:
 
 - `--max-attempts-per-target`: maximum number of solver-backed samples to try for each `(client, unknown, location)` target. The default is `65536`.
