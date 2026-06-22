@@ -343,6 +343,19 @@ def run_target(
         if full_solver.check() == z3.sat:
             bug_model = model_to_json(full_solver.model(), env)
             full_solver.pop()
+            repeated = call_unknown(expand_call_inputs(target, sampled))
+            if observed != repeated:
+                return result(
+                    target,
+                    "impure",
+                    attempts=attempts,
+                    values=observed,
+                    model=bug_model,
+                    rejected_unsat=rejected_unsat,
+                    rejected_duplicate=rejected_duplicate,
+                    draws=draws,
+                    reason="the function produced two different outputs for identical calls, and has been deemed impure",
+                )
             return result(
                 target,
                 "bug_found",
@@ -359,19 +372,7 @@ def run_target(
     precondition_inputs = sample_precondition_model(pre_solver, env, input_names)
     model_result = try_sample(precondition_inputs)
     if model_result is not None:
-        result_repeat = try_sample(precondition_inputs)
-        if model_result != result_repeat:
-            return result(
-                target,
-                "impure",
-                attempts=attempts,
-                rejected_unsat=rejected_unsat,
-                rejected_duplicate=rejected_duplicate,
-                draws=draws,
-                reason="the function produced two different outputs for identical calls, and has been deemed impure",
-            )
-        else:
-            return model_result
+        return model_result
 
     progress_label = f"{target.callee or '<unknown>'} draws"
     with tqdm(total=max_draws, desc=progress_label, unit="draw", leave=False) as progress:
@@ -381,19 +382,7 @@ def run_target(
             inputs = sample_inputs(input_names, tuple(input_types.values()))
             sample_result = try_sample(inputs)
             if sample_result is not None:
-                result_repeat = try_sample(inputs)
-                if model_result != result_repeat:
-                    return result(
-                        target,
-                        "impure",
-                        attempts=attempts,
-                        rejected_unsat=rejected_unsat,
-                        rejected_duplicate=rejected_duplicate,
-                        draws=draws,
-                        reason="the function produced two different outputs for identical calls, and has been deemed impure",
-                    )
-                else:
-                    return sample_result
+                return sample_result
 
     if first_sample is not None:
         return replace(
