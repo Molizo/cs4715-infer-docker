@@ -1,67 +1,109 @@
-# Pulse Unknowns to Z3 "PBT" Dynamic Analysis Prototype
+# Pulse Unknowns to Z3 Dynamic Validation Prototype
 
-This is a Python prototype for converting Infer/Pulse unknown functions to dynamically executable
-pre- and post-condition triplets, using Z3. The script outputs a stub file, which can be used
-in a subsequent Pulse analysis to augment the pre- and post-condition sets to elimintate false positive
-and re-add false negative errors.
+This repository contains our proof-of-concept for reducing Pulse warnings that only appear because an external function is unknown to Infer. Pulse treats unknown calls conservatively: it can havoc the values they touch, which is useful for static analysis, but it can also produce warnings that the real external function would never trigger.
 
-**YOU NEED TO APPLY THE CUSTOM INFER PATCH FIRST TO OUTPUT THE ADDITIONALLY REQUIRED INTERMEDIATE DATA.**
-This data is already present in the `.html` exports, but the patch makes it acccessible programatically.
+Our prototype checks a smaller, more concrete question: for a warning that depends on an unknown call, can the real implementation actually produce the output needed to reach the reported error? To answer this, it reruns Infer/Pulse, extracts the pre-conditions at the unknown call and the bad post-conditions on the path to the error, translates the supported fragment to Z3, samples plausible inputs, calls the real implementation from a `.so` file through Python `ctypes`, and checks whether the observed output satisfies the bad post-condition.
 
-The current pipeline runs `infer capture`, followed by `infer analyze` to regenerate Pulse node-state 
-JSON, then runs `infer debug` for procedure summaries and metadata, lowers supported unknown-dependent
-failures into a small IL, then processes each `(client, unknown, location)` target independently.
-For each target it simplifies the pre/bad-post constraints with Z3, randomly samples integer inputs
-from a bell curve centered at zero, calls the real unknown implementation through `ctypes`, stores
-observed outputs, and generates focused C stubs.
+If we find a concrete input/output witness, the original warning is left untouched. If the attempt budget is exhausted without finding such a witness, it generates focused C stubs that can be used in a later Pulse run to suppress the warning.
 
-Z3 checks whether a sampled input and the real observed outputs satisfy Pulse's bad postcondition.
+The Docker image already contains the patched Infer build needed by the prototype. If you run this outside Docker, you need to apply `infer.patch` to Infer first, since the prototype relies on additional JSON intermediate Pulse data that is normally exposed just in the HTML debug.
+
+## Docker
+
+The easiest way to run the prototype is through Docker. To build the image locally from this repository, run:
+
+```sh
+docker build -t molizo/cs4715-infer-z3 .
+```
+
+This builds Infer from source, so it can take a while (~3h on 16 cores, 32GB RAM). You can also pull the prebuilt image instead:
+
+```sh
+docker pull molizo/cs4715-infer-z3
+```
+
+Then start a shell in the image:
+
+```sh
+docker run -it molizo/cs4715-infer-z3 /bin/bash
+```
+
+If you want to run the tool on files from your host machine, mount the current directory into the container:
+
+```sh
+docker run -it -v "$PWD:/work" molizo/cs4715-infer-z3 /bin/bash
+```
+
+If you already have a named container running, use `docker exec` to enter that container:
+
+```sh
+docker exec -it <container-name> /bin/bash
+```
+
+Inside the image, the examples are in `/app/examples`. The source code for the proof-of-concept, including the implementation of the `infer-z3` command, is in `/app/fuzzer/main.py`.
 
 ## Usage
 
-Edit the constants at the top of `main.py` if needed, then run:
+Run `infer-z3` with a directory of `.c` source files and a shared object containing the real implementations of the unknown functions:
 
 ```sh
-python3 main.py
+infer-z3 SOURCE_DIR SHARED_LIBRARY
 ```
 
-The generated stub can be found at `generated/unknown_stubs.c`.
-
-Debug information (including observed pre- and post-condition sets) can be found at 
-`generated/targets/*.json`
-
-`UNKNOWN_OBJECT` in `main.py` must point to an already-built `.so`, containing all of the unknown
-procedure implementations. 
-
-## Input Expectations
-
-The prototype reruns capture and analyze on every invocation:
+For example, inside the Docker image:
 
 ```sh
-infer capture --results-dir ... --force-delete-results-dir -- COMPILE_COMMAND
-infer analyze --pulse-only --pulse-experimental-track-all-unknown-calls
+infer-z3 /app/examples/x_is_5 /app/examples/x_is_5/real_unknowns.so
 ```
 
-against the configured results directory so capture data and node-state JSON are fresh. This assumes
-the local Infer build writes Pulse node-state JSON unconditionally during analysis.
+Another example, with an explicit output directory and a smaller attempt budget:
 
-Infer command logs are saved in `generated/infer_commands`.
+```sh
+infer-z3 /app/examples/broken_abs_lt_minus_10 /app/examples/broken_abs_lt_minus_10/real_unknowns.so --max-attempts-per-target=4096 --out-dir=/tmp/infer-z3-generated
+```
+
+`SOURCE_DIR` should contain the C clients to analyze. Infer scans the `.c` files directly in that directory and runs them with `clang -c`. 
+
+`SHARED_LIBRARY` should point to an already-built `.so` that exports the unknown functions used by those clients.
+
+Optional arguments:
+
+- `--max-attempts-per-target`: maximum number of solver-backed samples to try for each `(client, unknown, location)` target. The default is `65536`.
+- `--out-dir`: directory used for generated files, Infer output, and logs. The default is `generated`.
+
+## Output
+
+The generated stub file is written to:
+
+```text
+generated/unknown_stubs.c
+```
+
+Per-target debug information, including extracted constraints and observed values, is written to:
+
+```text
+generated/targets/*.json
+```
+
+Infer command logs are saved in:
+
+```text
+generated/infer_commands
+```
 
 ## Limitations
 
-Datatypes:
+Unknown functions must have a `void` return type, and their supported argument types are:
 
-- `void`
 - `int`
 - `int *`
+- `bool`
+- `bool *`
 
- targets are written to their own `generated/targets/*.json` file with a skip reason and
-are also logged to stderr.
+Infer reports C `bool` values as `_Bool`, and the prototype follows Infer's internal treatment of booleans as integer-like values. In Z3, bool-typed variables are therefore still represented as integer variables, with an added domain constraint of the form `z3.Or(varname == 0, varname == 1)`. We chose this representation because the surrounding Pulse constraints may still participate in affine linear integer reasoning, and we did not want the boolean encoding to interfere with that.
 
-Names ending in `_in` are generated by Z3/random sampling. Names ending in `_out` are produced by
-calling the real shared library. We therefore recommend avoiding analyzing code with variables labeled
-with this convention, in order to avoid undefined behavior in our prototype.
+Unsupported targets are written to their own `generated/targets/*.json` file with a skip reason and are also logged to stderr.
 
-- Integer overflow, division, and modulo semantics are approximate.
-- Fractional linear arithmetic from Pulse is passed to Z3 as rational arithmetic over `Int` variables where needed.
-- Random integer sampling uses Python's RNG with a bell curve centered at zero, sigma = 8; Hypothesis' RNG is a bit smarter but adds a dependency.
+Names ending in `_in` are generated by Z3/random sampling. Names ending in `_out` are produced by calling the real shared library. For this reason, it is best to avoid source variables that already use those suffixes when testing this prototype.
+
+For additional information on limitations please refer to our report.
