@@ -679,8 +679,8 @@ def extract_targets(
 ) -> list[ExtractedTarget]:
     targets: list[ExtractedTarget] = []
     for report in reports:
-        print("a report was found")
+        print("A report was found")
         if report_depends_on_unknown(report):
-            print("it depended on unknwon!")
+            print("It depended an unknown!")
             targets.append(extract_one(report, node_procedures, procedures))
     return targets
